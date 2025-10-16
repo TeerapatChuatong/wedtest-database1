@@ -1,4 +1,7 @@
 <?php
+require_once __DIR__ . '/../auth/session_boot.php';
+require_admin();
+
 // เพิ่มส่วนนี้ที่บรรทัดแรกสุดของทุกไฟล์ PHP API
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS");
@@ -10,7 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
-
+//
 header("Access-Control-Allow-Origin: *");
 header("Content-type: application/json; charset=utf-8");
 include('../db.php');
