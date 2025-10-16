@@ -1,58 +1,103 @@
 <?php
-// เพิ่มส่วนนี้ที่บรรทัดแรกสุดของทุกไฟล์ PHP API
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
-header("Content-Type: application/json");
+// api/users/search.php
 
-// จัดการ preflight request
+// ---- CORS & JSON ----
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type");
+header("Content-Type: application/json; charset=utf-8");
+
+// Preflight
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
+    http_response_code(204);
     exit();
 }
 
-header("Access-Control-Allow-Origin: *");
-header("Content-type: application/json; charset=utf-8");
-include('../db.php');
-
-$data = json_decode(file_get_contents("php://input"));
-
+// Method guard
 if ($_SERVER["REQUEST_METHOD"] !== "GET") {
-    echo json_encode(array('status' => 'error'));
-    die(); 
+    http_response_code(405);
+    echo json_encode(['status' => 'error', 'message' => 'Method not allowed']);
+    exit();
 }
 
+require_once __DIR__ . '/../db.php'; // ปรับ path ตามจริง
+
 try {
-    // รับ id ได้ทั้งจาก JSON และจาก query string
+    // สมมติ db.php สร้าง PDO ไว้ใน $dbh
+    // $dbh = new PDO(...)
+
+    // รับพารามิเตอร์
+    $rawBody  = file_get_contents("php://input");
+    $jsonBody = json_decode($rawBody, true);
+
     $id = null;
-    if (isset($data->id) && $data->id !== '') {
-        $id = trim($data->id);
+    if (isset($jsonBody['id']) && $jsonBody['id'] !== '') {
+        $id = trim($jsonBody['id']);
     } elseif (isset($_GET['id']) && $_GET['id'] !== '') {
         $id = trim($_GET['id']);
     }
 
-    if ($id !== null) {
-        // ค้นหาตาม id
-        $stmt = $dbh->prepare("SELECT id, fname, lname, avatar FROM user WHERE id = ?");
-        $stmt->execute([$id]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($row) {
-            echo json_encode(['status' => 'ok', 'data' => $row]);
-        } else {
-            // ไม่พบ id นี้
-            echo json_encode(['status' => 'ok', 'message' => 'No memberID', 'data' => null]);
-        }
-    } else {
-        // ไม่ระบุ id → ดึงทั้งหมด
-        $stmt = $dbh->prepare("SELECT id, fname, lname, avatar FROM user ORDER BY id DESC");
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $keyword = '';
+    if (isset($_GET['keyword'])) {
+        $keyword = trim($_GET['keyword']);
+    } elseif (isset($jsonBody['keyword'])) {
+        $keyword = trim($jsonBody['keyword']);
     }
 
-    $dbh = null;
-    }catch(PDOException $e) {
-    print "Error!: " . $e->getMessage() . "<br/>";
-    die();
+    // เคส 1: ถ้ามี id และไม่ส่ง keyword → คืนรายการเดียวตาม id
+    if ($id !== null && $keyword === '') {
+        $stmt = $dbh->prepare("SELECT id, fname, lname, avatar FROM user WHERE id = :id");
+        $stmt->bindValue(':id', (int)$id, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // คืนเป็น array เสมอ เพื่อให้ frontend handle เดียวกัน
+        $data = $row ? [$row] : [];
+        echo json_encode(['status' => 'ok', 'data' => $data], JSON_UNESCAPED_UNICODE);
+        exit();
+    }
+
+    // เคส 2: ถ้ามี keyword → ค้นแบบ like (และถ้า keyword เป็นตัวเลข จะลอง match id ตรง ๆ ด้วย)
+    if ($keyword !== '') {
+        $isNumeric = ctype_digit($keyword);
+
+        $sql = "SELECT id, fname, lname, avatar
+                FROM user
+                WHERE ";
+        $conds = [];
+        if ($isNumeric) {
+            $conds[] = "id = :id_eq";
+        }
+        $conds[] = "(fname LIKE :kw OR lname LIKE :kw
+                    /* OR email LIKE :kw */)";  // ถ้ามีคอลัมน์ email ให้เอาคอมเมนต์นี้ออก
+        $sql .= implode(" OR ", $conds) . " ORDER BY id ASC";
+
+        $stmt = $dbh->prepare($sql);
+        if ($isNumeric) {
+            $stmt->bindValue(':id_eq', (int)$keyword, PDO::PARAM_INT);
+        }
+        $like = '%' . $keyword . '%';
+        $stmt->bindValue(':kw', $like, PDO::PARAM_STR);
+
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['status' => 'ok', 'data' => $rows], JSON_UNESCAPED_UNICODE);
+        exit();
+    }
+
+    // เคส 3: ไม่ส่ง id/keyword → คืนทั้งหมด
+    $stmt = $dbh->prepare("SELECT id, fname, lname, avatar FROM user ORDER BY id DESC");
+    $stmt->execute();
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    echo json_encode(['status' => 'ok', 'data' => $rows], JSON_UNESCAPED_UNICODE);
+
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Server error',
+        // 'debug' => $e->getMessage(), // เปิดเฉพาะตอน dev
+    ], JSON_UNESCAPED_UNICODE);
+    exit();
 }
-?>
